@@ -6,6 +6,12 @@ import { parseHeaderOverrideJson } from "@/lib/requestOverrides";
 export interface FetchedModel {
   id: string;
   ownedBy: string | null;
+  pricing?: {
+    prompt?: string | null;
+    completion?: string | null;
+    inputCacheRead?: string | null;
+    inputCacheWrite?: string | null;
+  } | null;
 }
 
 export interface ModelFetchOptions {

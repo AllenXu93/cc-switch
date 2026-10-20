@@ -16,6 +16,16 @@ use std::time::Duration;
 pub struct FetchedModel {
     pub id: String,
     pub owned_by: Option<String>,
+    pub pricing: Option<FetchedModelPricing>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedModelPricing {
+    pub prompt: Option<String>,
+    pub completion: Option<String>,
+    pub input_cache_read: Option<String>,
+    pub input_cache_write: Option<String>,
 }
 
 /// 模型列表响应的兼容格式。
@@ -36,6 +46,23 @@ struct ModelsResponse {
 struct ModelEntry {
     id: String,
     owned_by: Option<String>,
+    pricing: Option<serde_json::Value>,
+}
+
+fn parse_token_pricing(value: Option<serde_json::Value>) -> Option<FetchedModelPricing> {
+    let pricing = value?.as_object()?.clone();
+    let string_value = |key: &str| pricing.get(key)?.as_str().map(str::to_string);
+    let parsed = FetchedModelPricing {
+        prompt: string_value("prompt"),
+        completion: string_value("completion"),
+        input_cache_read: string_value("input_cache_read"),
+        input_cache_write: string_value("input_cache_write"),
+    };
+    (parsed.prompt.is_some()
+        || parsed.completion.is_some()
+        || parsed.input_cache_read.is_some()
+        || parsed.input_cache_write.is_some())
+    .then_some(parsed)
 }
 
 /// `models[]` 条目对应的模型 id：`slug` 优先，回退 OpenAI 风格的 `id`；
@@ -127,12 +154,17 @@ pub async fn fetch_models(
                     .map(|m| FetchedModel {
                         id: m.id,
                         owned_by: m.owned_by,
+                        pricing: parse_token_pricing(m.pricing),
                     })
                     .collect()
             } else {
                 catalog_model_ids(resp.models)
                     .into_iter()
-                    .map(|id| FetchedModel { id, owned_by: None })
+                    .map(|id| FetchedModel {
+                        id,
+                        owned_by: None,
+                        pricing: None,
+                    })
                     .collect()
             };
 
@@ -634,6 +666,20 @@ mod tests {
         let data = resp.data.unwrap();
         assert_eq!(data[0].id, "my-model");
         assert!(data[0].owned_by.is_none());
+    }
+
+    #[test]
+    fn parses_only_openrouter_token_pricing_strings() {
+        let json = r#"{"data":[{"id":"priced","pricing":{"prompt":"0","completion":"0.000002","input_cache_read":"0.0000005","input_cache_write":3,"request":"0.01"}},{"id":"invalid","pricing":"free"}]}"#;
+        let resp: ModelsResponse = serde_json::from_str(json).unwrap();
+        let mut data = resp.data.unwrap();
+
+        let pricing = parse_token_pricing(data.remove(0).pricing).unwrap();
+        assert_eq!(pricing.prompt.as_deref(), Some("0"));
+        assert_eq!(pricing.completion.as_deref(), Some("0.000002"));
+        assert_eq!(pricing.input_cache_read.as_deref(), Some("0.0000005"));
+        assert!(pricing.input_cache_write.is_none());
+        assert!(parse_token_pricing(data.remove(0).pricing).is_none());
     }
 
     #[test]
